@@ -1,4 +1,0 @@
-name = "roblox-login"
-main = "index.js"
-compatibility_date = "2026-10-15"
-compatibility_flags = ["nodejs_compat"]
