@@ -94,6 +94,9 @@ async function solveArkose(publicKey, blob) {
   throw new Error('Captcha-Timeout');
 }
 
+/* Root-Route — hält den Service wach, cron-job.org pingt hier */
+app.get('/', (req, res) => res.send('ok'));
+
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.get('/balance', async (req, res) => {
