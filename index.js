@@ -4,6 +4,8 @@ import fs from 'fs';
 import path from 'path';
 
 const app = express();
+
+// CORS komplett öffnen für alle Domains (damit Tiiny.host und andere Webhoster fehlerfrei zugreifen können)
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
